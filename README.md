@@ -69,7 +69,7 @@ python launch_face_avatar_studio.py
 
 FaceVerse 权重不随官方源码仓库直接分发。本项目使用独立的 GitHub LFS 模型仓库：
 
-<https://github.com/Es777777/face-avatar-studio-models>
+<https://github.com/Es777777/face-avatar-studio>
 
 需要的文件：
 
