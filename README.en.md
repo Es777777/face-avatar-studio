@@ -65,7 +65,7 @@ Close the camera before switching backends. The first FaceVerse startup initiali
 
 The FaceVerse weights are not distributed directly in the official source repository. This project uses a separate GitHub LFS model repository:
 
-<https://github.com/Es777777/face-avatar-studio-models>
+<https://github.com/Es777777/face-avatar-studio>
 
 Required files:
 
