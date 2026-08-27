@@ -1,0 +1,15 @@
+# Local caches and generated runtime files
+.cache/
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.log
+
+# Local build output
+build/
+dist/
+
+# Keep personal recordings and generated previews out of the public repository
+artifacts/generated/
+artifacts/references/
+artifacts/logs/

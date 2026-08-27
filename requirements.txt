@@ -1,0 +1,16 @@
+mediapipe
+sounddevice
+faster-whisper
+pypinyin
+cmudict
+opencv-python
+pygame
+PyOpenGL
+numpy
+h5py
+scipy
+torch
+requests
+imageio-ffmpeg
+vtk
+PySide6>=6.6
