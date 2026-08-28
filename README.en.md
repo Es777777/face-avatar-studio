@@ -1,6 +1,6 @@
 # Face Avatar Studio
 
-A native Windows desktop application for real-time facial expression capture and 3D avatar driving. It is built around [Google GNM](https://github.com/google/GNM) and [MediaPipe Face Landmarker](https://github.com/google-ai-edge/mediapipe), with an optional [FaceVerse v4](https://github.com/LizhenWangT/FaceVerse_v4) full-head parametric backend.
+A native Windows desktop application for real-time facial expression capture and 3D avatar driving. It is built around [Google GNM](https://github.com/google/GNM) and [MediaPipe Face Landmarker](https://github.com/google-ai-edge/mediapipe), with optional [FaceVerse V2](https://github.com/LizhenWangT/FaceVerse#faceverse-version-2) 52D ARKit driving and a [FaceVerse v4](https://github.com/LizhenWangT/FaceVerse_v4) full-head parametric backend.
 
 [中文 README](README.md)
 
@@ -8,6 +8,7 @@ A native Windows desktop application for real-time facial expression capture and
 
 - Real-time camera capture of face landmarks, expressions, and head pose
 - MediaPipe + GNM by default for low-latency full-head avatar driving
+- Optional FaceVerse V2 with direct MediaPipe-to-ARKit 52D expression driving
 - Optional FaceVerse v4 621-dimensional parameter regression, including the head, eyeballs, teeth, and tongue
 - Camera and microphone selection from the desktop UI
 - Live camera preview, avatar preview, FPS, tracking state, and microphone level
@@ -58,6 +59,7 @@ After launch, select one of the tracking backends:
 
 - `MediaPipe (default)`: MediaPipe provides expression parameters and GNM drives the avatar
 - `FaceVerse v4`: MediaPipe is used only for a stable face ROI; the FaceVerse ResNet50 predicts the 621-dimensional parameters
+- `FaceVerse V2 (52D)`: MediaPipe's 52 ARKit expression scores directly drive the matching FaceVerse bases
 
 Close the camera before switching backends. The first FaceVerse startup initializes PyTorch and the model and may take several seconds.
 
@@ -79,6 +81,15 @@ Both files are already present in the current project. For a manual deployment, 
 Refer to the original FaceVerse repository for its code, license, copyright, and research citation:
 <https://github.com/LizhenWangT/FaceVerse_v4>
 
+Optional official FaceVerse V2 model location:
+
+```text
+external_FaceVerse_v2/data/faceverse_simple_v2.npy
+```
+
+When this file is present, the V2 backend automatically uses the official simplified V2 mesh. Until it is available, the backend remains functional by using the official 52D ARKit bases bundled in the V4 model with the complete V4 head mesh. The status bar always identifies which source is active. See the original V2 model and download instructions at:
+<https://github.com/LizhenWangT/FaceVerse#faceverse-version-2>
+
 ## Recording Outputs
 
 Each recording creates an independent session directory, normally containing:
@@ -99,6 +110,7 @@ STT uses faster-whisper. The selected model can be downloaded on first use or pr
 ```text
 face_avatar_studio/       desktop application source
 external_GNM/             Google GNM source
+external_FaceVerse_v2/    optional FaceVerse V2 model directory
 external_FaceVerse_v4/    FaceVerse v4 source and model files
 tools/diagnostics/        diagnostics and regression scripts
 artifacts/generated/      test screenshots and verification results
@@ -112,6 +124,10 @@ artifacts/logs/           historical logs
 ### FaceVerse is upside down, backwards, or appears frozen
 
 Confirm that both model files are present in `external_FaceVerse_v4/data/`, then fully exit and restart the application. The adapter converts FaceVerse native coordinates into the desktop preview coordinate system and updates the mesh from live regression results. Check that the status bar reports `FaceVerse v4` and that the frame counter and avatar FPS continue changing.
+
+### FaceVerse V2 reports "52D compatibility mode"
+
+This is an operational fallback: V2's direct ARKit mapping is using the complete V4-compatible head mesh. Place the official `faceverse_simple_v2.npy` under `external_FaceVerse_v2/data/` and restart the application to switch automatically to the official V2 mesh.
 
 ### First startup is slow
 
@@ -129,7 +145,7 @@ Run:
 .\build_windows_app.ps1
 ```
 
-The output is normally created under `dist/FaceAvatarStudio/`. A distributable build must include the external source trees, the MediaPipe model cache configuration, and the FaceVerse weights.
+The output is normally created under `dist/FaceAvatarStudio/`. A distributable build must include the external source trees, the MediaPipe model cache configuration, and the FaceVerse weights. The V2 model directory is included by the build script.
 
 ## Licenses and Acknowledgements
 

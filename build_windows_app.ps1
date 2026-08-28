@@ -15,6 +15,7 @@ python -m PyInstaller `
   --onedir `
   --name FaceAvatarStudio `
   --add-data "external_GNM;external_GNM" `
+  --add-data "external_FaceVerse_v2;external_FaceVerse_v2" `
   --add-data "external_FaceVerse_v4;external_FaceVerse_v4" `
   --collect-all mediapipe `
   --collect-all torch `

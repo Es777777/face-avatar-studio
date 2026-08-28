@@ -17,6 +17,7 @@ from PIL import Image, ImageTk
 
 from .pipeline import (
     FACEVERSE_DATA_DIR,
+    FACEVERSE_V2_DATA_DIR,
     FaceTrackingEngine,
     FramePacket,
     RealtimeVisemeAnalyzer,
@@ -27,6 +28,7 @@ from .pipeline import (
     create_tracking_engine,
     ensure_directory,
     faceverse_backend_status,
+    faceverse_v2_backend_status,
     prewarm_face_landmarker,
 )
 
@@ -34,6 +36,16 @@ CAPTURE_SIZE = (960, 540)
 CAMERA_SIZE = (640, 480)
 CAPTURE_FPS = 30
 TRACKING_FPS = 18
+
+BACKEND_LABELS = {
+    "mediapipe": "MediaPipe",
+    "faceverse": "FaceVerse v4",
+    "faceverse_v2": "FaceVerse V2（52维）",
+}
+
+
+def _backend_display_name(backend: str) -> str:
+    return BACKEND_LABELS.get(str(backend), str(backend))
 
 
 def _sensitive_level(linear_level: float, sensitivity: float = 1.35) -> float:
@@ -273,12 +285,11 @@ class CaptureWorker(threading.Thread):
         """Heavy GNM/MediaPipe work; capture continues while this warms up."""
         try:
             self.engine = create_tracking_engine(self.tracking_backend)
-            backend_name = (
-                "FaceVerse v4"
-                if self.tracking_backend == "faceverse"
-                else "MediaPipe"
-            )
+            backend_name = _backend_display_name(self.tracking_backend)
             self.status_queue.put(f"{backend_name} 表情追踪已就绪。")
+            source_label = getattr(self.engine.avatar, "source_label", "")
+            if source_label:
+                self.status_queue.put(f"头像模型：{source_label}")
         except Exception as exc:
             self.status_queue.put(f"表情模型加载失败: {exc}")
             return
@@ -549,7 +560,13 @@ class AvatarRasterizer:
         order = np.argsort(face_verts[:, :, 2].mean(axis=1))
         for index in order:
             cv2.fillConvexPoly(image, points[self.faces[index]], tuple(int(v) for v in colors[index]), cv2.LINE_AA)
-        cv2.putText(image, "GNM HEAD / LIVE EXPRESSION", (18, 31), cv2.FONT_HERSHEY_SIMPLEX, .55, (213, 220, 232), 1, cv2.LINE_AA)
+        if getattr(self.model, "is_faceverse_v2", False):
+            renderer_label = "FACEVERSE V2 / 52D LIVE"
+        elif self._is_faceverse:
+            renderer_label = "FACEVERSE V4 / LIVE EXPRESSION"
+        else:
+            renderer_label = "GNM HEAD / LIVE EXPRESSION"
+        cv2.putText(image, renderer_label, (18, 31), cv2.FONT_HERSHEY_SIMPLEX, .55, (213, 220, 232), 1, cv2.LINE_AA)
         return image
 
 
@@ -806,7 +823,7 @@ class FaceAvatarStudioApp:
         self.tracking_backend = self.field(
             side,
             "表情追踪后端",
-            ["MediaPipe（默认）", "FaceVerse v4"],
+            ["MediaPipe（默认）", "FaceVerse v4", "FaceVerse V2（52维）"],
         )
         self.tracking_backend.bind("<<ComboboxSelected>>", self._backend_changed)
         self.mic = self.field(side, "麦克风", ["正在读取设备..."])
@@ -892,15 +909,20 @@ class FaceAvatarStudioApp:
         except Exception: return -1
 
     def tracking_backend_id(self) -> str:
-        return (
-            "faceverse"
-            if self.tracking_backend.get().startswith("FaceVerse")
-            else "mediapipe"
-        )
+        value = self.tracking_backend.get()
+        if value.startswith("FaceVerse V2"):
+            return "faceverse_v2"
+        if value.startswith("FaceVerse v4"):
+            return "faceverse"
+        return "mediapipe"
 
     def _backend_changed(self, _event=None) -> None:
         if self.tracking_backend_id() == "mediapipe":
             self.status.set("追踪后端：MediaPipe（默认，低延迟）")
+            return
+        if self.tracking_backend_id() == "faceverse_v2":
+            _available, message = faceverse_v2_backend_status()
+            self.status.set(f"追踪后端：FaceVerse V2（52维）；{message}")
             return
         _available, message = faceverse_backend_status()
         self.status.set(f"追踪后端：FaceVerse v4；{message}")
@@ -927,6 +949,21 @@ class FaceAvatarStudioApp:
             "ETfT_C9Oz1FFlykJdtj3h6MBR1KvQb5BYwesxFykH-7BZA?e=7ti1yj"
         )
 
+    def _offer_faceverse_v2_setup(self, message: str) -> None:
+        prompt = (
+            f"FaceVerse V2 暂时不可用：{message}\n\n"
+            f"请将 faceverse_simple_v2.npy 放入：\n{FACEVERSE_V2_DATA_DIR}\n\n"
+            "是否打开模型目录和官方 FaceVerse V2 下载页面？"
+        )
+        if not messagebox.askyesno("FaceVerse V2", prompt):
+            return
+        ensure_directory(FACEVERSE_V2_DATA_DIR)
+        try:
+            os.startfile(str(FACEVERSE_V2_DATA_DIR))
+        except Exception:
+            pass
+        webbrowser.open("https://github.com/LizhenWangT/FaceVerse#faceverse-version-2")
+
     def mic_choice(self):
         value = self.mic.get()
         try: return int(value.split(":", 1)[0]), value
@@ -946,6 +983,11 @@ class FaceAvatarStudioApp:
             if not available:
                 self._offer_faceverse_setup(message)
                 return
+        elif backend == "faceverse_v2":
+            available, message = faceverse_v2_backend_status()
+            if not available:
+                self._offer_faceverse_v2_setup(message)
+                return
         self.worker = CaptureWorker(index, backend); self.worker.start(); self.last_packet_index = -1
         self.tracking_clock_started = False
         self.last_tracking_wall = time.perf_counter()
@@ -953,7 +995,7 @@ class FaceAvatarStudioApp:
         self.open_button.configure(state="disabled"); self.close_button.configure(state="normal")
         self.tracking_backend.configure(state="disabled")
         self.preview.configure(image="", text="正在打开摄像头..."); self.avatar.show_message("正在加载头像和表情追踪模型")
-        backend_name = "FaceVerse v4" if backend == "faceverse" else "MediaPipe"
+        backend_name = _backend_display_name(backend)
         self.metrics.set(
             f"后端：{backend_name}   人脸：等待模型   摄像头：正在打开   "
             "追踪：预热中   头像：正在加载   录制：未开始"
@@ -1088,7 +1130,7 @@ class FaceAvatarStudioApp:
                     tracking_fps = (packet.frame_index - self.last_tracking_index) / elapsed
                     self.last_tracking_wall, self.last_tracking_index = now, packet.frame_index
                     tracking_status = f"{tracking_fps:.1f} FPS"
-                backend_name = "FaceVerse" if worker.tracking_backend == "faceverse" else "MediaPipe"
+                backend_name = _backend_display_name(worker.tracking_backend)
                 self.metrics.set(f"后端：{backend_name}   帧号：{packet.frame_index}   人脸：{face}   摄像头：{worker.capture_fps:.1f} FPS   追踪：{tracking_status}   头像：{worker.avatar_render_fps:.1f} FPS   录制：{recording}")
                 # These long diagnostic strings force ttk to recalculate
                 # wrapping/layout. Keep the live meter and preview fast, and
@@ -1121,11 +1163,12 @@ class FaceAvatarStudioApp:
                         key=lambda item: item[1],
                         reverse=True,
                     )[:18]
-                    parameter_label = (
-                        "FaceVerse 表情参数"
-                        if worker.tracking_backend == "faceverse"
-                        else "GNM 映射权重"
-                    )
+                    if worker.tracking_backend == "faceverse_v2":
+                        parameter_label = "FaceVerse V2 52维参数"
+                    elif worker.tracking_backend == "faceverse":
+                        parameter_label = "FaceVerse v4 表情参数"
+                    else:
+                        parameter_label = "GNM 映射权重"
                     self.gnm_diagnostics.set(
                         parameter_label
                         + "："

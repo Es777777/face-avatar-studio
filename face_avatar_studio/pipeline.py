@@ -91,6 +91,9 @@ EXTERNAL_FACEVERSE_DIR = PROJECT_ROOT / "external_FaceVerse_v4"
 FACEVERSE_DATA_DIR = EXTERNAL_FACEVERSE_DIR / "data"
 FACEVERSE_MODEL_PATH = FACEVERSE_DATA_DIR / "faceverse_v4_2.npy"
 FACEVERSE_NETWORK_PATH = FACEVERSE_DATA_DIR / "faceverse_resnet50.pth"
+EXTERNAL_FACEVERSE_V2_DIR = PROJECT_ROOT / "external_FaceVerse_v2"
+FACEVERSE_V2_DATA_DIR = EXTERNAL_FACEVERSE_V2_DIR / "data"
+FACEVERSE_V2_MODEL_PATH = FACEVERSE_V2_DATA_DIR / "faceverse_simple_v2.npy"
 USER_CACHE_DIR = Path.home() / ".face_avatar_studio_cache"
 
 FACE_LANDMARKER_URL = (
@@ -161,6 +164,18 @@ def faceverse_backend_status() -> tuple[bool, str]:
         return False, f"PyTorch 不可用：{exc}"
     device = "CUDA" if torch.cuda.is_available() else "CPU"
     return True, f"FaceVerse v4 已就绪（{device}）"
+
+
+def faceverse_v2_backend_status() -> tuple[bool, str]:
+    """Report the available source for the real-time FaceVerse V2 driver."""
+    if FACEVERSE_V2_MODEL_PATH.exists():
+        return True, "FaceVerse V2 官方网格已就绪（52维 ARKit）"
+    if FACEVERSE_MODEL_PATH.exists():
+        return True, "52维兼容模式已就绪（使用 V4 全头网格）"
+    return False, (
+        f"缺少 {FACEVERSE_V2_MODEL_PATH.name}，且未找到可用的 "
+        f"{FACEVERSE_MODEL_PATH.name} 兼容网格"
+    )
 
 
 def configure_vtk_output_window() -> None:
@@ -1686,6 +1701,69 @@ class FaceVerseAvatarModelAdapter:
         return normals
 
 
+class FaceVerseV2AvatarModelAdapter(FaceVerseAvatarModelAdapter):
+    """Expose a FaceVerse V2-style 52D mesh through the preview renderer API."""
+
+    def __init__(self, data: dict[str, Any], compatibility_mode: bool) -> None:
+        raw_shape = np.asarray(data["meanshape"], dtype=np.float32).reshape(-1, 3)
+        raw_texture = np.asarray(
+            data.get("meantex", np.full_like(raw_shape, 178.0)), dtype=np.float32
+        ).reshape(-1, 3)
+
+        if compatibility_mode:
+            raw_base = np.asarray(data["exBase_52"], dtype=np.float32)
+            names = data.get("exp_name_list_52", ())
+            # V4's 52D ARKit basis covers the deformable face/eye vertices.
+            # Pad the teeth, tongue and rear head vertices with zero deltas so
+            # they stay attached while the complete V4 mesh remains visible.
+            expression_base = np.zeros(
+                (raw_shape.size, raw_base.shape[1]), dtype=np.float32
+            )
+            # ``exBase_52`` stores neutral-minus-target deltas, opposite to
+            # the original V2 ``exBase`` convention used by FaceVerseModel.
+            # Negate it once here so positive ARKit coefficients consistently
+            # mean stronger expressions in both model sources.
+            expression_base[: raw_base.shape[0], :] = -raw_base
+            triangles = np.asarray(data["tri"], dtype=np.uint32)
+            self.source_label = "FaceVerse V2 52维兼容模式（V4 全头网格）"
+        else:
+            raw_base = np.asarray(data["exBase"], dtype=np.float32)
+            names = data.get("exp_name_list", ())
+            required = ("select_id", "tri_select")
+            if all(key in data for key in required):
+                selected = np.asarray(data["select_id"], dtype=np.int64).reshape(-1)
+                coordinates = np.stack(
+                    (selected * 3, selected * 3 + 1, selected * 3 + 2), axis=1
+                ).reshape(-1)
+                raw_shape = raw_shape[selected]
+                raw_texture = raw_texture[selected]
+                expression_base = raw_base[coordinates]
+                triangles = np.asarray(data["tri_select"], dtype=np.uint32)
+                self.source_label = "FaceVerse V2 官方简化网格（6335顶点）"
+            else:
+                expression_base = raw_base
+                triangles = np.asarray(data["tri"], dtype=np.uint32)
+                self.source_label = "FaceVerse V2 官方完整网格"
+
+        # V4 stores millimetres, while the original V2 package normally uses
+        # metre-scale values. Detect the unit from the neutral mesh bounds.
+        span = float(np.max(np.ptp(raw_shape, axis=0)))
+        unit_scale = 0.01 if span > 20.0 else 1.0
+        self.template_vertex_positions = np.ascontiguousarray(
+            raw_shape * unit_scale, dtype=np.float32
+        )
+        self.expression_base = np.ascontiguousarray(
+            expression_base * unit_scale, dtype=np.float32
+        )
+        self.expression_names = [str(name) for name in names]
+        self.triangles = triangles
+        self.num_vertices = len(self.template_vertex_positions)
+        self.vertex_colors = np.clip(raw_texture, 0.0, 255.0).astype(np.uint8)
+        self.is_faceverse = True
+        self.is_faceverse_v2 = True
+        self.render_axis_signs = np.asarray((1.0, -1.0, -1.0), dtype=np.float32)
+
+
 def _render_space_vertices(model: Any, vertices: np.ndarray) -> np.ndarray:
     """Return vertices in the coordinate system used by the preview camera."""
     converter = getattr(model, "render_vertices", None)
@@ -1817,6 +1895,151 @@ class FaceVerseAvatarDriver:
             for index in strongest
         }
         return expression, rotations, translation, vertices_np
+
+
+class FaceVerseV2AvatarDriver:
+    """Drive FaceVerse's 52 ARKit expression bases from MediaPipe scores."""
+
+    ARKIT_NAMES: tuple[str, ...] = (
+        "browDownLeft", "browDownRight", "browInnerUp", "browOuterUpLeft",
+        "browOuterUpRight", "cheekPuff", "cheekSquintLeft", "cheekSquintRight",
+        "eyeBlinkLeft", "eyeBlinkRight", "eyeLookDownLeft", "eyeLookDownRight",
+        "eyeLookInLeft", "eyeLookInRight", "eyeLookOutLeft", "eyeLookOutRight",
+        "eyeLookUpLeft", "eyeLookUpRight", "eyeSquintLeft", "eyeSquintRight",
+        "eyeWideLeft", "eyeWideRight", "jawForward", "jawLeft", "jawOpen",
+        "jawRight", "mouthClose", "mouthDimpleLeft", "mouthDimpleRight",
+        "mouthFrownLeft", "mouthFrownRight", "mouthFunnel", "mouthLeft",
+        "mouthLowerDownLeft", "mouthLowerDownRight", "mouthPressLeft",
+        "mouthPressRight", "mouthPucker", "mouthRight", "mouthRollLower",
+        "mouthRollUpper", "mouthShrugLower", "mouthShrugUpper", "mouthSmileLeft",
+        "mouthSmileRight", "mouthStretchLeft", "mouthStretchRight",
+        "mouthUpperUpLeft", "mouthUpperUpRight", "noseSneerLeft",
+        "noseSneerRight", "tongueOut",
+    )
+
+    def __init__(self) -> None:
+        available, message = faceverse_v2_backend_status()
+        if not available:
+            raise RuntimeError(
+                f"FaceVerse V2 后端不可用：{message}。模型目录：{FACEVERSE_V2_DATA_DIR}"
+            )
+        compatibility_mode = not FACEVERSE_V2_MODEL_PATH.exists()
+        source_path = (
+            FACEVERSE_MODEL_PATH if compatibility_mode else FACEVERSE_V2_MODEL_PATH
+        )
+        data = np.load(source_path, allow_pickle=True).item()
+        self.model = FaceVerseV2AvatarModelAdapter(data, compatibility_mode)
+        dimensions = self.model.expression_base.shape[1]
+        source_names = self.model.expression_names
+        self.expression_names = (
+            source_names if len(source_names) == dimensions else list(self.ARKIT_NAMES)
+        )
+        if len(self.expression_names) != dimensions:
+            raise RuntimeError(
+                f"FaceVerse V2 表情维度异常：basis={dimensions}, "
+                f"names={len(self.expression_names)}"
+            )
+        canonical = {self._normalize_name(name): name for name in self.ARKIT_NAMES}
+        self._blendshape_names = [
+            canonical.get(self._normalize_name(name), str(name))
+            for name in self.expression_names
+        ]
+        self._smooth_expression = np.zeros(dimensions, dtype=np.float32)
+        self._smooth_rotation = np.zeros(3, dtype=np.float32)
+        self._last_vertices = self.model.template_vertex_positions.copy()
+        self.last_semantic_weights: dict[str, float] = {}
+        self.source_label = self.model.source_label
+
+    @staticmethod
+    def _normalize_name(name: str) -> str:
+        return re.sub(r"[^a-z0-9]", "", str(name).lower())
+
+    def neutral_state(
+        self,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        expression = np.zeros_like(self._smooth_expression)
+        rotations = np.zeros((1, 3), dtype=np.float32)
+        translation = np.zeros(3, dtype=np.float32)
+        return expression, rotations, translation, self.model.template_vertex_positions.copy()
+
+    @staticmethod
+    def _pose_from_matrix(face_matrix: np.ndarray | None) -> tuple[np.ndarray, np.ndarray]:
+        if face_matrix is None:
+            return np.zeros(3, dtype=np.float32), np.zeros(3, dtype=np.float32)
+        matrix = np.asarray(face_matrix, dtype=np.float32).reshape(4, 4)
+        rotation = matrix[:3, :3]
+        try:
+            rotvec = SciRotation.from_matrix(rotation).as_rotvec().astype(np.float32)
+        except ValueError:
+            rotvec = np.zeros(3, dtype=np.float32)
+        translation = (0.01 * matrix[:3, 3]).astype(np.float32)
+        return rotvec, translation
+
+    def evaluate(
+        self,
+        blendshapes: dict[str, float],
+        face_matrix: np.ndarray | None,
+        landmarks: np.ndarray | None = None,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        del landmarks
+        target = np.asarray(
+            [clamp01(blendshapes.get(name, 0.0)) for name in self._blendshape_names],
+            dtype=np.float32,
+        )
+
+        # Geometry-derived opening is more responsive when MediaPipe's jawOpen
+        # classifier lags behind speech. Audio may assist opening, but never
+        # creates pucker/funnel, which avoids the false duck-face failure mode.
+        if "jawOpen" in self._blendshape_names:
+            jaw_index = self._blendshape_names.index("jawOpen")
+            geometry_open = clamp01(blendshapes.get("geometryJawOpen", 0.0))
+            audio_open = max(
+                clamp01(blendshapes.get("audioVisemeA", 0.0)) * 0.28,
+                clamp01(blendshapes.get("audioVisemeE", 0.0)) * 0.12,
+                clamp01(blendshapes.get("audioVisemeI", 0.0)) * 0.10,
+                clamp01(blendshapes.get("audioVisemeO", 0.0)) * 0.16,
+            )
+            target[jaw_index] = max(target[jaw_index], geometry_open, audio_open)
+
+        alpha = 0.58
+        self._smooth_expression *= 1.0 - alpha
+        self._smooth_expression += alpha * target
+        expression = self._smooth_expression.copy()
+        vertices = self.model.template_vertex_positions.reshape(-1) + (
+            self.model.expression_base @ expression
+        )
+        vertices = vertices.reshape(-1, 3).astype(np.float32, copy=False)
+
+        rotvec, translation = self._pose_from_matrix(face_matrix)
+        rotation_alpha = 0.42
+        self._smooth_rotation *= 1.0 - rotation_alpha
+        self._smooth_rotation += rotation_alpha * rotvec
+        if float(np.linalg.norm(self._smooth_rotation)) > 1e-4:
+            signs = self.model.render_axis_signs
+            display_vertices = vertices * signs
+            center = np.median(
+                self.model.template_vertex_positions * signs, axis=0
+            )
+            rotation = SciRotation.from_rotvec(
+                0.72 * self._smooth_rotation
+            ).as_matrix().astype(np.float32)
+            display_vertices = (display_vertices - center) @ rotation.T + center
+            vertices = np.ascontiguousarray(display_vertices * signs, dtype=np.float32)
+
+        self._last_vertices = vertices
+        strongest = np.argsort(expression)[-16:][::-1]
+        self.last_semantic_weights = {
+            self._blendshape_names[index]: float(expression[index])
+            for index in strongest
+            if expression[index] > 1e-4
+        }
+        self.last_semantic_weights["trackingBackendFaceVerseV2"] = 1.0
+        return (
+            expression,
+            self._smooth_rotation.reshape(1, 3).copy(),
+            translation,
+            vertices,
+        )
 
 
 class AvatarPreviewRenderer:
@@ -2675,8 +2898,22 @@ class FaceVerseTrackingEngine(FaceTrackingEngine):
             )
 
 
+class FaceVerseV2TrackingEngine(FaceTrackingEngine):
+    """Real-time 52D FaceVerse V2 driver using MediaPipe observations."""
+
+    def __init__(self, model_cache_dir: Path | None = None) -> None:
+        if getattr(self, "_initialized", False):
+            return
+        super().__init__(
+            model_cache_dir=model_cache_dir,
+            avatar=FaceVerseV2AvatarDriver(),
+        )
+
+
 def create_tracking_engine(backend: str = "mediapipe") -> FaceTrackingEngine:
     normalized = str(backend).strip().lower()
+    if normalized in {"faceverse_v2", "faceverse-v2", "faceverse2"}:
+        return FaceVerseV2TrackingEngine()
     if normalized == "faceverse":
         return FaceVerseTrackingEngine()
     return FaceTrackingEngine()

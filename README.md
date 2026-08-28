@@ -3,7 +3,9 @@
 Windows 本地桌面表情捕捉与 3D 头像驱动软件。项目基于
 [Google GNM](https://github.com/google/GNM) 和
 [MediaPipe Face Landmarker](https://github.com/google-ai-edge/mediapipe)，并提供
-可选的 [FaceVerse v4](https://github.com/LizhenWangT/FaceVerse_v4) 全头参数化后端。
+可选的 [FaceVerse V2](https://github.com/LizhenWangT/FaceVerse#faceverse-version-2)
+52 维 ARKit 驱动和 [FaceVerse v4](https://github.com/LizhenWangT/FaceVerse_v4)
+全头参数化后端。
 
 [English README](README.en.md)
 
@@ -11,6 +13,7 @@ Windows 本地桌面表情捕捉与 3D 头像驱动软件。项目基于
 
 - 摄像头实时采集人脸关键点、表情和头部姿态
 - 默认使用 MediaPipe + GNM，低延迟驱动带完整头部的 3D 头像
+- 可选 FaceVerse V2：52 维 ARKit 表情基与 MediaPipe 逐项直连
 - 可选 FaceVerse v4：621 维参数回归，包含头部、眼球、牙齿和舌头模型
 - 在界面中选择摄像头和麦克风
 - 实时预览摄像头画面、头像画面、FPS、检测状态和音量
@@ -62,6 +65,7 @@ python launch_face_avatar_studio.py
 
 - `MediaPipe（默认）`：MediaPipe 直接提供表情参数，GNM 负责头像驱动
 - `FaceVerse v4`：MediaPipe 只用于稳定人脸 ROI，FaceVerse ResNet50 回归 621 维参数
+- `FaceVerse V2（52维）`：MediaPipe 的 52 个 ARKit 表情分数直接驱动 FaceVerse 表情基
 
 选择后端前请先关闭摄像头。FaceVerse 的首次加载会初始化 PyTorch 和模型，可能需要几秒。
 
@@ -84,6 +88,17 @@ external_FaceVerse_v4/data/faceverse_resnet50.pth
 FaceVerse 代码和模型的版权、许可证及研究引用请以原作者仓库为准：
 <https://github.com/LizhenWangT/FaceVerse_v4>
 
+FaceVerse V2 的官方可选模型文件位置：
+
+```text
+external_FaceVerse_v2/data/faceverse_simple_v2.npy
+```
+
+如果该文件存在，V2 后端会自动使用官方 V2 简化网格；如果暂未下载，程序会使用
+V4 模型内置的官方 52 维 ARKit 表情基和完整头部网格运行兼容模式，界面状态栏会明确
+显示当前模型来源。V2 原始模型与下载说明见：
+<https://github.com/LizhenWangT/FaceVerse#faceverse-version-2>
+
 ## 录制输出
 
 每次录制会创建独立会话目录，通常包含：
@@ -104,6 +119,7 @@ STT 使用 faster-whisper。模型可在首次使用时下载，也可以根据�
 ```text
 face_avatar_studio/       桌面程序源码
 external_GNM/             Google GNM 外部源码
+external_FaceVerse_v2/    FaceVerse V2 可选模型目录
 external_FaceVerse_v4/    FaceVerse v4 外部源码和模型
 tools/diagnostics/        诊断与回归脚本
 artifacts/generated/      测试截图和验证结果
@@ -119,6 +135,12 @@ artifacts/logs/           历史日志
 请确认两个权重文件都在 `external_FaceVerse_v4/data/`，然后完全退出软件再重启。
 当前适配器会将 FaceVerse 原生坐标转换到桌面预览坐标，并使用实时回归结果更新网格。
 可先在界面状态栏确认后端显示为 `FaceVerse v4`，并观察帧号和头像 FPS 是否持续变化。
+
+### FaceVerse V2 显示“52维兼容模式”
+
+这是正常状态，表示 V2 的逐项 ARKit 驱动正在使用 V4 全头兼容网格。将官方
+`faceverse_simple_v2.npy` 放入 `external_FaceVerse_v2/data/` 并重启软件后，会自动
+切换为官方 V2 网格。
 
 ### 首次启动较慢
 
@@ -139,7 +161,7 @@ artifacts/logs/           历史日志
 ```
 
 生成目录通常为 `dist/FaceAvatarStudio/`。发布可执行版本时，需要同时携带外部源码、
-MediaPipe 模型缓存配置和 FaceVerse 权重。
+MediaPipe 模型缓存配置和 FaceVerse 权重。V2 模型目录也会一并打包。
 
 ## 许可证与致谢
 
