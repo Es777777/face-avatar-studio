@@ -171,7 +171,7 @@ def faceverse_v2_backend_status() -> tuple[bool, str]:
     if FACEVERSE_V2_MODEL_PATH.exists():
         return True, "FaceVerse V2 官方网格已就绪（52维 ARKit）"
     if FACEVERSE_MODEL_PATH.exists():
-        return True, "52维兼容模式已就绪（使用 V4 全头网格）"
+        return True, "52维兼容模式已就绪（V4 全头牙齿联动）"
     return False, (
         f"缺少 {FACEVERSE_V2_MODEL_PATH.name}，且未找到可用的 "
         f"{FACEVERSE_MODEL_PATH.name} 兼容网格"
@@ -1711,21 +1711,88 @@ class FaceVerseV2AvatarModelAdapter(FaceVerseAvatarModelAdapter):
         ).reshape(-1, 3)
 
         if compatibility_mode:
-            raw_base = np.asarray(data["exBase_52"], dtype=np.float32)
+            raw_base_52 = np.asarray(data["exBase_52"], dtype=np.float32)
             names = data.get("exp_name_list_52", ())
-            # V4's 52D ARKit basis covers the deformable face/eye vertices.
-            # Pad the teeth, tongue and rear head vertices with zero deltas so
-            # they stay attached while the complete V4 mesh remains visible.
-            expression_base = np.zeros(
-                (raw_shape.size, raw_base.shape[1]), dtype=np.float32
+            # ``exBase_52`` only contains the first 15,456 face vertices. The
+            # V4 head keeps eyeballs, upper/lower teeth and tongue in later
+            # vertex ranges, so applying this matrix alone leaves the jaw and
+            # teeth disconnected. Use its full-head MGB bases for the
+            # corresponding ARKit actions, and retain the 52D semantic order.
+            full_base = np.asarray(data["exBase"], dtype=np.float32).reshape(
+                raw_shape.size, -1
             )
-            # ``exBase_52`` stores neutral-minus-target deltas, opposite to
-            # the original V2 ``exBase`` convention used by FaceVerseModel.
-            # Negate it once here so positive ARKit coefficients consistently
-            # mean stronger expressions in both model sources.
-            expression_base[: raw_base.shape[0], :] = -raw_base
+            full_names = [str(name) for name in data.get("exp_name_list", ())]
+            full_index = {name: index for index, name in enumerate(full_names)}
+            semantic_to_full: dict[str, tuple[str, ...]] = {
+                "browDownLeft": ("brow_down_L_MGB",),
+                "browDownRight": ("brow_down_R_MGB",),
+                "browInnerUp": ("brow_raiseIn_L_MGB", "brow_raiseIn_R_MGB"),
+                "browOuterUpLeft": ("brow_raiseOuter_left_MGB",),
+                "browOuterUpRight": ("brow_raiseOuter_right_MGB",),
+                "cheekPuff": ("cheek_blow_left_MGB", "cheek_blow_right_MGB"),
+                "cheekSquintLeft": ("eye_cheekRaise_L_MGB",),
+                "cheekSquintRight": ("eye_cheekRaise_R_MGB",),
+                "eyeBlinkLeft": ("eye_blink_L_MGB",),
+                "eyeBlinkRight": ("eye_blink_R_MGB",),
+                "eyeLookDownLeft": ("eye_lookDown_L_MGB",),
+                "eyeLookDownRight": ("eye_lookDown_R_MGB",),
+                "eyeLookInLeft": ("eye_lookRight_L_MGB",),
+                "eyeLookInRight": ("eye_lookLeft_R_MGB",),
+                "eyeLookOutLeft": ("eye_lookLeft_L_MGB",),
+                "eyeLookOutRight": ("eye_lookRight_R_MGB",),
+                "eyeLookUpLeft": ("eye_lookUp_L_MGB",),
+                "eyeLookUpRight": ("eye_lookUp_R_MGB",),
+                "eyeSquintLeft": ("eye_faceScrunch_L_MGB",),
+                "eyeSquintRight": ("eye_faceScrunch_R_MGB",),
+                "eyeWideLeft": ("eye_widen_L_MGB",),
+                "eyeWideRight": ("eye_widen_R_MGB",),
+                "jawForward": ("jaw_fwd_MGB",),
+                "jawLeft": ("jaw_left_MGB",),
+                "jawOpen": ("jaw_open_MGB",),
+                "jawRight": ("jaw_right_MGB",),
+                "mouthDimpleLeft": ("mouth_dimple_left_MGB",),
+                "mouthDimpleRight": ("mouth_dimple_right_MGB",),
+                "mouthFrownLeft": ("mouth_cornerDepress_L_MGB",),
+                "mouthFrownRight": ("mouth_cornerDepress_R_MGB",),
+                "mouthFunnel": (
+                    "mouth_funnel_DL_MGB", "mouth_funnel_DR_MGB",
+                    "mouth_funnel_UL_MGB", "mouth_funnel_UR_MGB",
+                ),
+                "mouthLeft": ("mouth_left_MGB",),
+                "mouthLowerDownLeft": ("mouth_lowerLipDepress_left_MGB",),
+                "mouthLowerDownRight": ("mouth_lowerLipDepress_right_MGB",),
+                "mouthPressLeft": ("mouth_lipsPress_L_MGB",),
+                "mouthPressRight": ("mouth_lipsPress_R_MGB",),
+                "mouthPucker": (
+                    "mouth_lipsPurse_DL_MGB", "mouth_lipsPurse_DR_MGB",
+                    "mouth_lipsPurse_UL_MGB", "mouth_lipsPurse_UR_MGB",
+                ),
+                "mouthRight": ("mouth_right_MGB",),
+                "mouthSmileLeft": ("mouth_cornerPull_left_MGB",),
+                "mouthSmileRight": ("mouth_cornerPull_right_MGB",),
+                "mouthStretchLeft": ("mouth_stretch_left_MGB",),
+                "mouthStretchRight": ("mouth_stretch_right_MGB",),
+                "mouthUpperUpLeft": ("mouth_upperLipRaise_left_MGB",),
+                "mouthUpperUpRight": ("mouth_upperLipRaise_right_MGB",),
+                "noseSneerLeft": ("nose_wrinkle_left_MGB",),
+                "noseSneerRight": ("nose_wrinkle_right_MGB",),
+            }
+            expression_base = np.zeros(
+                (raw_shape.size, raw_base_52.shape[1]), dtype=np.float32
+            )
+            for target_index, semantic_name in enumerate(names):
+                source_names = semantic_to_full.get(str(semantic_name), ())
+                source_indices = [full_index[name] for name in source_names if name in full_index]
+                if source_indices:
+                    expression_base[:, target_index] = np.mean(
+                        full_base[:, source_indices], axis=1
+                    )
+                else:
+                    # A small number of ARKit channels have no one-to-one MGB
+                    # equivalent. Preserve their face-only V4 52D behavior.
+                    expression_base[: raw_base_52.shape[0], target_index] = -raw_base_52[:, target_index]
             triangles = np.asarray(data["tri"], dtype=np.uint32)
-            self.source_label = "FaceVerse V2 52维兼容模式（V4 全头网格）"
+            self.source_label = "FaceVerse V2 52维兼容模式（V4 全头牙齿联动）"
         else:
             raw_base = np.asarray(data["exBase"], dtype=np.float32)
             names = data.get("exp_name_list", ())
@@ -2000,6 +2067,23 @@ class FaceVerseV2AvatarDriver:
                 clamp01(blendshapes.get("audioVisemeO", 0.0)) * 0.16,
             )
             target[jaw_index] = max(target[jaw_index], geometry_open, audio_open)
+
+            # MediaPipe can emit small pucker/funnel/close scores while a
+            # person is speaking. Those channels are valid for a closed-mouth
+            # pose, but blending them into an open jaw creates the deformed
+            # duck-bill shape seen with the old V2 compatibility path. Opening
+            # wins; round-mouth actions are allowed back in only as the jaw
+            # returns to closed.
+            jaw = float(target[jaw_index])
+            mouth_gate = 1.0 - clamp01((jaw - 0.12) / 0.36)
+            for conflicting_name, strength in (
+                ("mouthPucker", 0.30),
+                ("mouthFunnel", 0.45),
+                ("mouthClose", 0.0),
+            ):
+                if conflicting_name in self._blendshape_names:
+                    conflicting_index = self._blendshape_names.index(conflicting_name)
+                    target[conflicting_index] *= mouth_gate * strength
 
         alpha = 0.58
         self._smooth_expression *= 1.0 - alpha

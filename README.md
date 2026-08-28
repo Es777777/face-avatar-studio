@@ -95,8 +95,8 @@ external_FaceVerse_v2/data/faceverse_simple_v2.npy
 ```
 
 如果该文件存在，V2 后端会自动使用官方 V2 简化网格；如果暂未下载，程序会使用
-V4 模型内置的官方 52 维 ARKit 表情基和完整头部网格运行兼容模式，界面状态栏会明确
-显示当前模型来源。V2 原始模型与下载说明见：
+V4 全头模型的完整下颌、牙齿和口腔联动基底，并把 52 个 ARKit 通道映射到对应的
+FaceVerse 表情语义，界面状态栏会明确显示当前模型来源。V2 原始模型与下载说明见：
 <https://github.com/LizhenWangT/FaceVerse#faceverse-version-2>
 
 ## 录制输出

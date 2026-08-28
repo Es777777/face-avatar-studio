@@ -87,7 +87,7 @@ Optional official FaceVerse V2 model location:
 external_FaceVerse_v2/data/faceverse_simple_v2.npy
 ```
 
-When this file is present, the V2 backend automatically uses the official simplified V2 mesh. Until it is available, the backend remains functional by using the official 52D ARKit bases bundled in the V4 model with the complete V4 head mesh. The status bar always identifies which source is active. See the original V2 model and download instructions at:
+When this file is present, the V2 backend automatically uses the official simplified V2 mesh. Until it is available, the backend remains functional by using the V4 full-head jaw, teeth, and oral-cavity deformation bases with semantic mapping for the 52 ARKit channels. The status bar always identifies which source is active. See the original V2 model and download instructions at:
 <https://github.com/LizhenWangT/FaceVerse#faceverse-version-2>
 
 ## Recording Outputs
