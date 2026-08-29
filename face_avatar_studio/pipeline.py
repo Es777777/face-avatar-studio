@@ -1786,7 +1786,15 @@ class FaceVerseV2AvatarModelAdapter(FaceVerseAvatarModelAdapter):
             for target_index, semantic_name in enumerate(names):
                 source_names = semantic_to_full.get(str(semantic_name), ())
                 source_indices = [full_index[name] for name in source_names if name in full_index]
-                if source_indices:
+                if str(semantic_name) in ("eyeSquintLeft", "eyeSquintRight"):
+                    # ``eye_faceScrunch`` depresses the complete eye socket.
+                    # The original 52D squint basis closes the eyelids without
+                    # producing the deep under-eye dent seen in compatibility
+                    # mode, and it does not need accessory-mesh deformation.
+                    expression_base[: raw_base_52.shape[0], target_index] = (
+                        -raw_base_52[:, target_index]
+                    )
+                elif source_indices:
                     expression_base[:, target_index] = np.mean(
                         full_base[:, source_indices], axis=1
                     )
@@ -2084,17 +2092,39 @@ class FaceVerseV2AvatarDriver:
         smile_left = self._blendshape_index.get("mouthSmileLeft")
         smile_right = self._blendshape_index.get("mouthSmileRight")
         jaw_index = self._blendshape_index.get("jawOpen")
+        mouth_left_index = self._blendshape_index.get("mouthLeft")
+        mouth_right_index = self._blendshape_index.get("mouthRight")
+        pucker_index = self._blendshape_index.get("mouthPucker")
+        funnel_index = self._blendshape_index.get("mouthFunnel")
         smile = max(
             float(expression[smile_left]) if smile_left is not None else 0.0,
             float(expression[smile_right]) if smile_right is not None else 0.0,
         )
         jaw = float(expression[jaw_index]) if jaw_index is not None else 0.0
+        mouth_left = (
+            float(expression[mouth_left_index])
+            if mouth_left_index is not None else 0.0
+        )
+        mouth_right = (
+            float(expression[mouth_right_index])
+            if mouth_right_index is not None else 0.0
+        )
+        lateral_mouth = max(mouth_left, mouth_right)
+        pucker = max(
+            float(expression[pucker_index]) if pucker_index is not None else 0.0,
+            float(expression[funnel_index]) if funnel_index is not None else 0.0,
+        )
         lip_parted = max(
             clamp01(blendshapes.get("geometryLipParted", 0.0)),
             clamp01(blendshapes.get("geometryJawOpen", 0.0)),
             jaw,
         )
-        if smile <= 1e-4 and lip_parted <= 1e-4:
+        if (
+            smile <= 1e-4
+            and lip_parted <= 1e-4
+            and lateral_mouth <= 1e-4
+            and pucker <= 1e-4
+        ):
             return
 
         lower_start, lower_end = lower_range
@@ -2105,12 +2135,20 @@ class FaceVerseV2AvatarDriver:
         # Smile bases pull the lips sideways but leave the rigid dental rows
         # almost unchanged. Narrow each row around its own center so the
         # molars stay behind the mouth corners instead of piercing a lip.
+        constriction = max(lateral_mouth, 0.7 * pucker)
         for dental_row, scale in (
-            (lower, 1.0 - 0.18 * smile),
-            (upper, 1.0 - 0.12 * smile),
+            (lower, max(0.65, 1.0 - 0.18 * smile - 0.26 * constriction)),
+            (upper, max(0.68, 1.0 - 0.12 * smile - 0.22 * constriction)),
         ):
             center_x = float(np.mean(dental_row[:, 0]))
             dental_row[:, 0] = center_x + (dental_row[:, 0] - center_x) * scale
+
+        dental_shift_x = 0.09 * (mouth_right - mouth_left)
+        dental_retreat = 0.05 * constriction
+        lower[:, 0] += dental_shift_x
+        upper[:, 0] += dental_shift_x
+        lower[:, 2] += dental_retreat
+        upper[:, 2] += dental_retreat
 
         # In FaceVerse's native coordinates larger Z is farther from the
         # preview camera. Separate the rows just enough to reveal both without

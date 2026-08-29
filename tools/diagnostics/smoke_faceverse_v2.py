@@ -43,7 +43,10 @@ def main() -> int:
         return 5
 
     action_vertices: dict[str, np.ndarray] = {}
-    for name in ("jawOpen", "mouthSmileLeft", "eyeBlinkLeft", "eyeBlinkRight"):
+    for name in (
+        "jawOpen", "mouthSmileLeft", "eyeBlinkLeft", "eyeBlinkRight",
+        "eyeSquintLeft", "eyeSquintRight",
+    ):
         driver._smooth_expression.fill(0.0)
         values = {name: 0.8}
         if name == "jawOpen":
@@ -61,6 +64,12 @@ def main() -> int:
     if blink_difference < 1e-3:
         print("[faceverse-v2] FAIL: left and right blink are not independent")
         return 7
+    squint_difference = float(
+        np.abs(action_vertices["eyeSquintLeft"] - action_vertices["eyeSquintRight"]).sum()
+    )
+    if squint_difference < 1e-3:
+        print("[faceverse-v2] FAIL: left and right squint are not independent")
+        return 8
 
     driver._smooth_expression.fill(0.0)
     dental_values = {
@@ -82,27 +91,53 @@ def main() -> int:
     untouched_delta = corrected[:lower_start] - uncorrected[:lower_start]
     if float(np.max(np.abs(untouched_delta))) > 1e-6:
         print("[faceverse-v2] FAIL: dental correction changed the face mesh")
-        return 8
+        return 9
     if float(np.mean(lower_delta[:, 2])) >= -1e-4:
         print("[faceverse-v2] FAIL: lower teeth were not brought forward")
-        return 9
+        return 10
     if float(np.mean(lower_delta[:, 1])) >= -1e-4:
         print("[faceverse-v2] FAIL: lower teeth were not exposed behind the lower lip")
-        return 10
+        return 11
     if float(np.mean(upper_delta[:, 2])) <= 1e-4:
         print("[faceverse-v2] FAIL: upper teeth were not retracted")
-        return 11
+        return 12
     for start, end in ((lower_start, lower_end), (upper_start, upper_end)):
         corrected_width = float(np.ptp(corrected[start:end, 0]))
         original_width = float(np.ptp(uncorrected[start:end, 0]))
         if corrected_width >= original_width:
             print("[faceverse-v2] FAIL: smile did not narrow a dental row")
-            return 12
+            return 13
+
+    lateral_centers: dict[str, float] = {}
+    for side in ("mouthLeft", "mouthRight"):
+        driver._smooth_expression.fill(0.0)
+        lateral_expression, _, _, lateral_vertices = driver.evaluate(
+            {side: 0.9, "mouthPucker": 0.8}, None
+        )
+        lateral_uncorrected = (
+            driver.model.template_vertex_positions.reshape(-1)
+            + driver.model.expression_base @ lateral_expression
+        ).reshape(-1, 3)
+        lateral_centers[side] = float(
+            np.mean(lateral_vertices[upper_start:upper_end, 0])
+            - np.mean(lateral_uncorrected[upper_start:upper_end, 0])
+        )
+        if float(np.ptp(lateral_vertices[upper_start:upper_end, 0])) >= float(
+            np.ptp(lateral_uncorrected[upper_start:upper_end, 0])
+        ):
+            print(f"[faceverse-v2] FAIL: {side} did not constrain the dental row")
+            return 14
+    if lateral_centers["mouthLeft"] >= -1e-4:
+        print("[faceverse-v2] FAIL: mouthLeft dental row moved toward the cheek")
+        return 15
+    if lateral_centers["mouthRight"] <= 1e-4:
+        print("[faceverse-v2] FAIL: mouthRight dental row moved toward the cheek")
+        return 16
 
     engine = create_tracking_engine("faceverse_v2")
     if engine.avatar.source_label != driver.source_label:
         print("[faceverse-v2] FAIL: engine selected a different model source")
-        return 13
+        return 17
 
     frames = 200
     started = time.perf_counter()
