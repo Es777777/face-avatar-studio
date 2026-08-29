@@ -1709,6 +1709,9 @@ class FaceVerseV2AvatarModelAdapter(FaceVerseAvatarModelAdapter):
         raw_texture = np.asarray(
             data.get("meantex", np.full_like(raw_shape, 178.0)), dtype=np.float32
         ).reshape(-1, 3)
+        self.tongue_vertex_range: tuple[int, int] | None = None
+        self.lower_teeth_vertex_range: tuple[int, int] | None = None
+        self.upper_teeth_vertex_range: tuple[int, int] | None = None
 
         if compatibility_mode:
             raw_base_52 = np.asarray(data["exBase_52"], dtype=np.float32)
@@ -1792,6 +1795,22 @@ class FaceVerseV2AvatarModelAdapter(FaceVerseAvatarModelAdapter):
                     # equivalent. Preserve their face-only V4 52D behavior.
                     expression_base[: raw_base_52.shape[0], target_index] = -raw_base_52[:, target_index]
             triangles = np.asarray(data["tri"], dtype=np.uint32)
+            vertex_boundaries = np.asarray(
+                data.get("ver_inds", ()), dtype=np.int64
+            ).reshape(-1)
+            if (
+                len(vertex_boundaries) >= 6
+                and int(vertex_boundaries[5]) == len(raw_shape)
+            ):
+                self.tongue_vertex_range = (
+                    int(vertex_boundaries[2]), int(vertex_boundaries[3])
+                )
+                self.lower_teeth_vertex_range = (
+                    int(vertex_boundaries[3]), int(vertex_boundaries[4])
+                )
+                self.upper_teeth_vertex_range = (
+                    int(vertex_boundaries[4]), int(vertex_boundaries[5])
+                )
             self.source_label = "FaceVerse V2 52维兼容模式（V4 全头牙齿联动）"
         else:
             raw_base = np.asarray(data["exBase"], dtype=np.float32)
@@ -1826,6 +1845,12 @@ class FaceVerseV2AvatarModelAdapter(FaceVerseAvatarModelAdapter):
         self.triangles = triangles
         self.num_vertices = len(self.template_vertex_positions)
         self.vertex_colors = np.clip(raw_texture, 0.0, 255.0).astype(np.uint8)
+        if self.lower_teeth_vertex_range is not None:
+            lower_start, lower_end = self.lower_teeth_vertex_range
+            self.vertex_colors[lower_start:lower_end] = (226, 222, 214)
+        if self.upper_teeth_vertex_range is not None:
+            upper_start, upper_end = self.upper_teeth_vertex_range
+            self.vertex_colors[upper_start:upper_end] = (232, 228, 220)
         self.is_faceverse = True
         self.is_faceverse_v2 = True
         self.render_axis_signs = np.asarray((1.0, -1.0, -1.0), dtype=np.float32)
@@ -2011,6 +2036,9 @@ class FaceVerseV2AvatarDriver:
             canonical.get(self._normalize_name(name), str(name))
             for name in self.expression_names
         ]
+        self._blendshape_index = {
+            name: index for index, name in enumerate(self._blendshape_names)
+        }
         self._smooth_expression = np.zeros(dimensions, dtype=np.float32)
         self._smooth_rotation = np.zeros(3, dtype=np.float32)
         self._last_vertices = self.model.template_vertex_positions.copy()
@@ -2042,6 +2070,56 @@ class FaceVerseV2AvatarDriver:
         translation = (0.01 * matrix[:3, 3]).astype(np.float32)
         return rotvec, translation
 
+    def _correct_oral_accessories(
+        self,
+        vertices: np.ndarray,
+        expression: np.ndarray,
+        blendshapes: dict[str, float],
+    ) -> None:
+        lower_range = self.model.lower_teeth_vertex_range
+        upper_range = self.model.upper_teeth_vertex_range
+        if lower_range is None or upper_range is None:
+            return
+
+        smile_left = self._blendshape_index.get("mouthSmileLeft")
+        smile_right = self._blendshape_index.get("mouthSmileRight")
+        jaw_index = self._blendshape_index.get("jawOpen")
+        smile = max(
+            float(expression[smile_left]) if smile_left is not None else 0.0,
+            float(expression[smile_right]) if smile_right is not None else 0.0,
+        )
+        jaw = float(expression[jaw_index]) if jaw_index is not None else 0.0
+        lip_parted = max(
+            clamp01(blendshapes.get("geometryLipParted", 0.0)),
+            clamp01(blendshapes.get("geometryJawOpen", 0.0)),
+            jaw,
+        )
+        if smile <= 1e-4 and lip_parted <= 1e-4:
+            return
+
+        lower_start, lower_end = lower_range
+        upper_start, upper_end = upper_range
+        lower = vertices[lower_start:lower_end]
+        upper = vertices[upper_start:upper_end]
+
+        # Smile bases pull the lips sideways but leave the rigid dental rows
+        # almost unchanged. Narrow each row around its own center so the
+        # molars stay behind the mouth corners instead of piercing a lip.
+        for dental_row, scale in (
+            (lower, 1.0 - 0.18 * smile),
+            (upper, 1.0 - 0.12 * smile),
+        ):
+            center_x = float(np.mean(dental_row[:, 0]))
+            dental_row[:, 0] = center_x + (dental_row[:, 0] - center_x) * scale
+
+        # In FaceVerse's native coordinates larger Z is farther from the
+        # preview camera. Separate the rows just enough to reveal both without
+        # forcing the jaw open or pushing teeth through the lips.
+        upper[:, 2] += 0.025 * smile
+        dental_opening = smile * lip_parted
+        lower[:, 2] -= min(0.025, 0.07 * dental_opening)
+        lower[:, 1] -= min(0.035, 0.12 * dental_opening)
+
     def evaluate(
         self,
         blendshapes: dict[str, float],
@@ -2057,8 +2135,8 @@ class FaceVerseV2AvatarDriver:
         # Geometry-derived opening is more responsive when MediaPipe's jawOpen
         # classifier lags behind speech. Audio may assist opening, but never
         # creates pucker/funnel, which avoids the false duck-face failure mode.
-        if "jawOpen" in self._blendshape_names:
-            jaw_index = self._blendshape_names.index("jawOpen")
+        jaw_index = self._blendshape_index.get("jawOpen")
+        if jaw_index is not None:
             geometry_open = clamp01(blendshapes.get("geometryJawOpen", 0.0))
             audio_open = max(
                 clamp01(blendshapes.get("audioVisemeA", 0.0)) * 0.28,
@@ -2081,8 +2159,8 @@ class FaceVerseV2AvatarDriver:
                 ("mouthFunnel", 0.45),
                 ("mouthClose", 0.0),
             ):
-                if conflicting_name in self._blendshape_names:
-                    conflicting_index = self._blendshape_names.index(conflicting_name)
+                conflicting_index = self._blendshape_index.get(conflicting_name)
+                if conflicting_index is not None:
                     target[conflicting_index] *= mouth_gate * strength
 
         alpha = 0.58
@@ -2093,6 +2171,7 @@ class FaceVerseV2AvatarDriver:
             self.model.expression_base @ expression
         )
         vertices = vertices.reshape(-1, 3).astype(np.float32, copy=False)
+        self._correct_oral_accessories(vertices, expression, blendshapes)
 
         rotvec, translation = self._pose_from_matrix(face_matrix)
         rotation_alpha = 0.42
