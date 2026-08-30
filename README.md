@@ -9,6 +9,24 @@ Windows 本地桌面表情捕捉与 3D 头像驱动软件。项目基于
 
 [English README](README.en.md)
 
+> 当前仓库提供的是 Windows 桌面软件源码，不是网页项目，也没有上传编译好的
+> `.exe`。默认启动入口是 `face_avatar_studio/tk_ui.py`。大模型文件使用 Git LFS
+> 管理，首次克隆前请先安装并初始化 Git LFS。
+
+## 快速开始
+
+```powershell
+git lfs install
+git clone https://github.com/Es777777/face-avatar-studio.git
+cd face-avatar-studio
+python -m pip install -r requirements.txt
+python launch_face_avatar_studio.py
+```
+
+也可以双击 `start_face_avatar_studio.bat`。如果只下载 ZIP，Git LFS 文件可能仍是
+很小的文本指针；请使用 Git 克隆并执行 `git lfs pull`，否则 FaceVerse 和部分
+GNM 数据无法加载。
+
 ## 功能
 
 - 摄像头实时采集人脸关键点、表情和头部姿态
@@ -28,6 +46,9 @@ Windows 本地桌面表情捕捉与 3D 头像驱动软件。项目基于
 - 可用摄像头和麦克风
 - CPU 可运行；FaceVerse 在有 CUDA 的环境中速度更好
 
+`requirements.txt` 同时包含运行依赖和 Windows 打包所需的 PyInstaller。FaceVerse
+模型推理占用内存较多，首次加载慢不代表摄像头没有打开。
+
 程序使用 Tk 桌面界面启动，避免把 Qt/VTK 的 DLL 加载错误带到主窗口启动阶段。
 VTK 只在头像预览线程中按需加载，渲染异常不会直接卡死主界面。
 
@@ -45,7 +66,9 @@ python -m pip install -r requirements.txt
 git clone https://github.com/google/GNM.git external_GNM
 ```
 
-MediaPipe 的 `face_landmarker.task` 会按项目配置下载并缓存到用户缓存目录。
+本仓库已经包含 GNM 源码和 GNM 数据；只有在使用不完整的 ZIP 或自行清理外部目录
+时才需要重新下载。MediaPipe 的 `face_landmarker.task` 会按项目配置下载并缓存到
+用户缓存目录。
 
 ## 启动
 
@@ -71,7 +94,8 @@ python launch_face_avatar_studio.py
 
 ## FaceVerse 模型
 
-FaceVerse 权重不随官方源码仓库直接分发。本项目使用独立的 GitHub LFS 模型仓库：
+FaceVerse 权重不随官方源码仓库直接分发。本项目将它们作为 GitHub LFS 文件存放在
+同一个软件仓库中：
 
 <https://github.com/Es777777/face-avatar-studio>
 
@@ -82,7 +106,9 @@ external_FaceVerse_v4/data/faceverse_v4_2.npy
 external_FaceVerse_v4/data/faceverse_resnet50.pth
 ```
 
-当前项目目录已经包含这两个文件。手动重新部署时，可从模型仓库下载后放入上述目录。
+使用 Git LFS 克隆本仓库后，这两个文件会自动恢复到上述路径。手动重新部署时，可
+执行 `git lfs pull`，或从本仓库的 LFS 文件页面下载后放入上述目录。不要改名；程序
+会检查精确文件名。
 程序启动时会检查文件是否存在；缺少权重时不会静默伪装成 FaceVerse，而会显示明确的错误提示。
 
 FaceVerse 代码和模型的版权、许可证及研究引用请以原作者仓库为准：
@@ -128,6 +154,11 @@ artifacts/logs/           历史日志
 .cache/                   MediaPipe 和开发缓存
 ```
 
+实际启动链路是 `start_face_avatar_studio.bat` -> `python -m face_avatar_studio` ->
+`face_avatar_studio/tk_ui.py`。`desktop_app.py`、`ui.py` 和 `webapp.py` 是早期
+Qt/网页实验入口，目前不参与默认启动；保留它们是为了参考和兼容历史开发版本。
+`tools/diagnostics/` 只放开发诊断脚本，不是额外的启动入口。
+
 ## 常见问题
 
 ### FaceVerse 头像倒立、反向或只显示静止模型
@@ -152,6 +183,10 @@ artifacts/logs/           历史日志
 关闭摄像头后重新启动头像预览。如果问题仍在，请查看项目根目录的启动日志和
 `artifacts/logs/`，并优先使用软件渲染路径排查显卡驱动问题。
 
+如果首次启动卡在模型下载，请检查网络和代理，并确认用户缓存目录可写。可以先运行
+`python tools\diagnostics\smoke_mediapipe_warmup.py` 检查 MediaPipe；FaceVerse 则先
+确认 Git LFS 已经拉取真实模型，而不是只有 100 多字节的指针文件。
+
 ## 打包
 
 执行：
@@ -159,6 +194,9 @@ artifacts/logs/           历史日志
 ```powershell
 .\build_windows_app.ps1
 ```
+
+打包前请确认已经执行 `python -m pip install -r requirements.txt`，其中包含
+`PyInstaller`。如果只想运行源码，不需要单独执行打包步骤。
 
 生成目录通常为 `dist/FaceAvatarStudio/`。发布可执行版本时，需要同时携带外部源码、
 MediaPipe 模型缓存配置和 FaceVerse 权重。V2 模型目录也会一并打包。

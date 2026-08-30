@@ -4,6 +4,25 @@ A native Windows desktop application for real-time facial expression capture and
 
 [中文 README](README.md)
 
+> This repository contains the Windows desktop application source, not a web project,
+> and does not currently publish a prebuilt `.exe`. The default entry point is
+> `face_avatar_studio/tk_ui.py`. Large model files are managed with Git LFS, so install
+> and initialize Git LFS before cloning.
+
+## Quick Start
+
+```powershell
+git lfs install
+git clone https://github.com/Es777777/face-avatar-studio.git
+cd face-avatar-studio
+python -m pip install -r requirements.txt
+python launch_face_avatar_studio.py
+```
+
+You can also double-click `start_face_avatar_studio.bat`. A ZIP download may contain
+small Git LFS pointer files instead of the real models; use a Git clone and run
+`git lfs pull`, otherwise FaceVerse and some GNM data cannot load.
+
 ## Features
 
 - Real-time camera capture of face landmarks, expressions, and head pose
@@ -23,6 +42,10 @@ A native Windows desktop application for real-time facial expression capture and
 - A working camera and microphone
 - CPU is supported; CUDA is recommended for better FaceVerse performance
 
+`requirements.txt` includes both runtime dependencies and PyInstaller for the Windows
+build. FaceVerse inference can use substantial memory, and a slow first model load does
+not mean that the camera failed to open.
+
 The application uses a Tk desktop shell so the main window does not depend on the Qt/VTK DLL startup chain. VTK is loaded on demand in the avatar preview worker, and renderer failures are isolated from the main UI.
 
 ## Installation
@@ -39,7 +62,10 @@ If GNM is not present locally:
 git clone https://github.com/google/GNM.git external_GNM
 ```
 
-The MediaPipe `face_landmarker.task` model is downloaded and cached according to the project configuration.
+The repository already includes the GNM source and data. If you are using an incomplete
+ZIP or have removed the external directory, restore it using the upstream GNM repository.
+The MediaPipe `face_landmarker.task` model is downloaded and cached according to the
+project configuration.
 
 ## Launch
 
@@ -65,7 +91,8 @@ Close the camera before switching backends. The first FaceVerse startup initiali
 
 ## FaceVerse Models
 
-The FaceVerse weights are not distributed directly in the official source repository. This project uses a separate GitHub LFS model repository:
+The FaceVerse weights are not distributed directly in the official source repository.
+This project stores them as GitHub LFS files in this same software repository:
 
 <https://github.com/Es777777/face-avatar-studio>
 
@@ -76,7 +103,10 @@ external_FaceVerse_v4/data/faceverse_v4_2.npy
 external_FaceVerse_v4/data/faceverse_resnet50.pth
 ```
 
-Both files are already present in the current project. For a manual deployment, download them from the model repository and place them in the directory above. The application checks these files explicitly and reports a clear error instead of silently pretending that FaceVerse is active.
+With Git LFS enabled, cloning this repository restores both files to the directory above.
+For a manual deployment, run `git lfs pull`, or download the LFS files from this repository
+and place them there. Keep the exact filenames; the application checks them explicitly and
+reports a clear error instead of silently pretending that FaceVerse is active.
 
 Refer to the original FaceVerse repository for its code, license, copyright, and research citation:
 <https://github.com/LizhenWangT/FaceVerse_v4>
@@ -119,6 +149,13 @@ artifacts/logs/           historical logs
 .cache/                   MediaPipe and development caches
 ```
 
+The active launch chain is `start_face_avatar_studio.bat` ->
+`python -m face_avatar_studio` -> `face_avatar_studio/tk_ui.py`.
+`desktop_app.py`, `ui.py`, and `webapp.py` are earlier Qt/web experiments and are not
+used by the default launcher. They remain in the tree for historical reference and
+compatibility with older development versions. The scripts under `tools/diagnostics/`
+are development checks, not additional application launchers.
+
 ## Troubleshooting
 
 ### FaceVerse is upside down, backwards, or appears frozen
@@ -137,6 +174,12 @@ The first run may load MediaPipe, PyTorch, FaceVerse, or VTK. These modules rema
 
 Close the camera and restart the avatar preview. If the issue persists, inspect the launch log and `artifacts/logs/`. The software renderer can be used to distinguish graphics-driver issues from tracking issues.
 
+If the first run is stuck while downloading a model, check network/proxy access and that
+the user cache directory is writable. You can run
+`python tools\diagnostics\smoke_mediapipe_warmup.py` to check MediaPipe separately.
+For FaceVerse, confirm that Git LFS has restored real model files rather than pointer
+files that are only a few hundred bytes long.
+
 ## Packaging
 
 Run:
@@ -144,6 +187,9 @@ Run:
 ```powershell
 .\build_windows_app.ps1
 ```
+
+Before packaging, run `python -m pip install -r requirements.txt`; this installs
+`PyInstaller`. Source-code users do not need to run the packaging step.
 
 The output is normally created under `dist/FaceAvatarStudio/`. A distributable build must include the external source trees, the MediaPipe model cache configuration, and the FaceVerse weights. The V2 model directory is included by the build script.
 
